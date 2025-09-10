@@ -4,16 +4,14 @@
 #include <mbedtls/gcm.h>
 #include <mbedtls/md.h>
 #include <cstring>
-
 #include <ArduinoJson.h>
 
 // ---------- User Config ----------
-// Set via Serial at boot or use defaults below
 String WIFI_SSID = "KABALI RAAA";
 String WIFI_PASS = "";
-String PI_HOST = "10.223.52.243"; // Pi IP
-uint16_t PI_PORT = 5001;          // TCP port
-String SHARED_PASSPHRASE = "ecs"; // Must match UI configuration
+String PI_HOST = "10.223.52.243"; 
+uint16_t PI_PORT = 5001;          
+String SHARED_PASSPHRASE = "ecs"; 
 
 // ---------- Helpers ----------
 static void sha256(const uint8_t *input, size_t len, uint8_t out[32]) {
@@ -28,7 +26,6 @@ static void sha256(const uint8_t *input, size_t len, uint8_t out[32]) {
 }
 
 static int b64decode(const char *in, uint8_t *out, size_t out_size) {
-  // Simple base64 decoder for ESP32
   const char *chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   int len = strlen(in);
   int out_len = 0;
@@ -38,20 +35,26 @@ static int b64decode(const char *in, uint8_t *out, size_t out_size) {
     
     uint32_t val = 0;
     int pad = 0;
+    int valid_chars = 0;
     
-    for (int j = 0; j < 4; j++) {
-      if (i + j >= len) return -1;
+    for (int j = 0; j < 4 && (i + j) < len; j++) {
       char c = in[i + j];
       if (c == '=') {
         pad++;
         continue;
       }
+      if (c == ' ' || c == '\n' || c == '\r') {
+        continue;
+      }
       const char *pos = strchr(chars, c);
       if (!pos) return -1;
       val = (val << 6) | (pos - chars);
+      valid_chars++;
     }
     
-    for (int j = 0; j < 3 - pad; j++) {
+    val <<= (6 * (4 - valid_chars));
+    
+    for (int j = 0; j < 3 - pad && j < 3; j++) {
       if (out_len >= (int)out_size) return -1;
       out[out_len++] = (val >> (16 - 8*j)) & 0xFF;
     }
@@ -66,9 +69,16 @@ static bool aes_gcm_decrypt(const uint8_t key[32], const uint8_t *iv, size_t iv_
   mbedtls_gcm_context gcm;
   mbedtls_gcm_init(&gcm);
   int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 256);
-  if (rc != 0) { mbedtls_gcm_free(&gcm); return false; }
+  if (rc != 0) { 
+    Serial.printf("GCM setkey failed: %d\n", rc);
+    mbedtls_gcm_free(&gcm); 
+    return false; 
+  }
   rc = mbedtls_gcm_auth_decrypt(&gcm, ct_len, iv, iv_len, aad, aad_len, tag, tag_len,
                                 ciphertext, out_plain);
+  if (rc != 0) {
+    Serial.printf("GCM decrypt failed: %d\n", rc);
+  }
   mbedtls_gcm_free(&gcm);
   return rc == 0;
 }
@@ -77,8 +87,26 @@ WiFiClient client;
 WiFiClient httpClient;
 uint8_t key[32];
 
-// Function declarations
-void sendToWebServer(const String& message, const String& type = "info");
+void sendToWebServer(const String& message, const String& type = "info") {
+  if (WiFi.status() != WL_CONNECTED) return;
+  
+  HTTPClient http;
+  http.begin(httpClient, "http://" + PI_HOST + ":5000/esp32-status");
+  http.addHeader("Content-Type", "application/json");
+  
+  StaticJsonDocument<256> doc;
+  doc["message"] = message;
+  doc["type"] = type;
+  
+  String jsonString;
+  serializeJson(doc, jsonString);
+  
+  int httpResponseCode = http.POST(jsonString);
+  if (httpResponseCode > 0) {
+    Serial.println("Status sent: " + message);
+  }
+  http.end();
+}
 
 void connectWifi() {
   Serial.printf("Connecting to WiFi %s...\n", WIFI_SSID.c_str());
@@ -113,206 +141,168 @@ void connectTcp() {
 
 void deriveKey() {
   sha256((const uint8_t*)SHARED_PASSPHRASE.c_str(), SHARED_PASSPHRASE.length(), key);
-  Serial.println("Derived AES-256 key from passphrase.");
-}
-
-void sendToWebServer(const String& message, const String& type) {
-  if (WiFi.status() != WL_CONNECTED) return;
-  
-  HTTPClient http;
-  http.begin(httpClient, "http://" + PI_HOST + ":5000/esp32-status");
-  http.addHeader("Content-Type", "application/json");
-  
-  StaticJsonDocument<256> doc;
-  doc["message"] = message;
-  doc["type"] = type;
-  
-  String jsonString;
-  serializeJson(doc, jsonString);
-  
-  int httpResponseCode = http.POST(jsonString);
-  if (httpResponseCode > 0) {
-    Serial.println("Status sent to web server: " + message);
-  } else {
-    Serial.println("Failed to send status to web server");
+  Serial.println("=== KEY DERIVATION ===");
+  Serial.printf("Passphrase: '%s'\n", SHARED_PASSPHRASE.c_str());
+  Serial.print("Key (first 8 bytes): ");
+  for (int i = 0; i < 8; i++) {
+    Serial.printf("%02X ", key[i]);
   }
-  http.end();
+  Serial.println();
+  Serial.println("Expected: D9 40 B5 64 13 AF 58 48");
+  Serial.println("=====================");
 }
-
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
-  Serial.println("\nESP32 Secure Receiver starting...");
-  Serial.println("Using hardcoded settings:");
-  Serial.println("SSID: " + WIFI_SSID);
-  Serial.println("Pi Host: " + PI_HOST);
-  Serial.println("Pi Port: " + String(PI_PORT));
-  Serial.println("Passphrase: [SET]");
-  Serial.println();
-
+  delay(2000);
+  Serial.println("\n=== ESP32 CRYPTO DEBUG ===");
+  
   connectWifi();
   deriveKey();
   connectTcp();
   
-  // Send initial status to web server
-  sendToWebServer("ESP32 Client started and ready", "info");
+  sendToWebServer("ESP32 ready for crypto debug", "info");
 }
 
-String readLine(WiFiClient &c) {
-  String line;
-  unsigned long timeout = millis() + 5000; // 5 second timeout
+String readCompleteJson(WiFiClient &c) {
+  String buffer = "";
+  unsigned long timeout = millis() + 10000;
+  bool jsonStarted = false;
+  int braceCount = 0;
   
   while (c.connected() && millis() < timeout) {
     if (c.available()) {
       char ch = (char)c.read();
-      if (ch == '\n') break;
-      line += ch;
+      
+      if (!jsonStarted && (ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t')) {
+        continue;
+      }
+      
+      buffer += ch;
+      
+      if (ch == '{') {
+        jsonStarted = true;
+        braceCount++;
+      } else if (ch == '}') {
+        braceCount--;
+        if (braceCount == 0 && jsonStarted) {
+          break;
+        }
+      }
     } else {
       delay(10);
     }
   }
   
-  // Debug: print what we received
-  Serial.print("Received line: ");
-  Serial.println(line);
-  Serial.print("Line length: ");
-  Serial.println(line.length());
-  
-  // Debug: print raw bytes
-  Serial.print("Raw bytes: ");
-  for (int i = 0; i < line.length(); i++) {
-    Serial.print((int)line[i], HEX);
-    Serial.print(" ");
-  }
-  Serial.println();
-  
-  return line;
+  return buffer;
 }
 
 void loop() {
   if (!client.connected()) {
-    delay(500);
+    Serial.println("TCP reconnecting...");
+    delay(1000);
     connectTcp();
-    delay(500);
+    delay(1000);
     return;
   }
 
-  String line = readLine(client);
-  if (line.length() == 0) {
-    delay(10);
+  if (!client.available()) {
+    delay(100);
     return;
   }
+
+  String jsonData = readCompleteJson(client);
+  if (jsonData.length() == 0) return;
   
-  // Check if line is too short to be valid JSON
-  if (line.length() < 50) {
-    Serial.print("Line too short, ignoring: ");
-    Serial.println(line);
-    return;
-  }
+  Serial.println("\n=== RECEIVED MESSAGE ===");
+  Serial.println("JSON: " + jsonData);
   
-  // Test with a known good JSON string first
-  if (line.indexOf("test") >= 0) {
-    Serial.println("Testing with known JSON...");
-    String testJson = "{\"iv\":\"dGVzdA==\",\"ciphertext\":\"dGVzdA==\",\"tag\":\"dGVzdA==\"}";
-    StaticJsonDocument<256> testDoc;
-    DeserializationError testErr = deserializeJson(testDoc, testJson);
-    if (testErr) {
-      Serial.print("Test JSON failed: ");
-      Serial.println(testErr.c_str());
-    } else {
-      Serial.println("Test JSON parsing works!");
-    }
-  }
-  // Parse JSON { iv, ciphertext, tag }
-  Serial.println("Received encrypted message, parsing JSON...");
-  sendToWebServer("Received encrypted message, parsing JSON...", "info");
+  StaticJsonDocument<2048> doc;
+  DeserializationError err = deserializeJson(doc, jsonData);
   
-  StaticJsonDocument<1024> doc;
-  DeserializationError err = deserializeJson(doc, line);
   if (err) {
-    Serial.print("JSON parse error: "); Serial.println(err.c_str());
-    Serial.print("Raw JSON string: "); Serial.println(line);
-    sendToWebServer("JSON parse error: " + String(err.c_str()), "error");
+    Serial.printf("JSON error: %s\n", err.c_str());
     return;
   }
   
-  // Debug: print the parsed document
-  Serial.println("JSON document parsed successfully");
-  Serial.print("Document size: "); Serial.println(doc.size());
-  const char *iv_b64 = doc["iv"] | nullptr;
-  const char *ct_b64 = doc["ciphertext"] | nullptr;
-  const char *tag_b64 = doc["tag"] | nullptr;
-  
-  Serial.print("Parsed fields - iv: ");
-  Serial.print(iv_b64 ? "OK" : "NULL");
-  if (iv_b64) {
-    Serial.print(" (");
-    Serial.print(iv_b64);
-    Serial.print(")");
-  }
-  Serial.print(", ciphertext: ");
-  Serial.print(ct_b64 ? "OK" : "NULL");
-  if (ct_b64) {
-    Serial.print(" (");
-    Serial.print(ct_b64);
-    Serial.print(")");
-  }
-  Serial.print(", tag: ");
-  Serial.print(tag_b64 ? "OK" : "NULL");
-  if (tag_b64) {
-    Serial.print(" (");
-    Serial.print(tag_b64);
-    Serial.print(")");
-  }
-  Serial.println();
-  
-  if (!iv_b64 || !ct_b64 || !tag_b64) {
-    Serial.println("Invalid JSON fields - missing required fields.");
-    sendToWebServer("Invalid JSON fields - missing required fields", "error");
+  if (!doc.containsKey("iv") || !doc.containsKey("ciphertext") || !doc.containsKey("tag")) {
+    Serial.println("Missing JSON fields");
     return;
   }
+  
+  const char *iv_b64 = doc["iv"];
+  const char *ct_b64 = doc["ciphertext"];
+  const char *tag_b64 = doc["tag"];
+  
+  Serial.println("=== BASE64 VALUES ===");
+  Serial.printf("IV: %s\n", iv_b64);
+  Serial.printf("Ciphertext: %s\n", ct_b64);
+  Serial.printf("Tag: %s\n", tag_b64);
 
-  Serial.println("JSON parsed successfully, decoding base64...");
-  sendToWebServer("JSON parsed successfully, decoding base64...", "info");
-
-  uint8_t iv[16]; // will use 12
+  uint8_t iv[16];
   uint8_t ct[1024];
   uint8_t tag[16];
+  
   int iv_len = b64decode(iv_b64, iv, sizeof(iv));
   int ct_len = b64decode(ct_b64, ct, sizeof(ct));
   int tag_len = b64decode(tag_b64, tag, sizeof(tag));
+  
   if (iv_len <= 0 || ct_len <= 0 || tag_len <= 0) {
-    Serial.println("Base64 decode failed.");
-    sendToWebServer("Base64 decode failed", "error");
+    Serial.printf("Base64 decode failed: iv=%d, ct=%d, tag=%d\n", iv_len, ct_len, tag_len);
     return;
   }
+  
+  Serial.println("=== DECODED BYTES ===");
+  Serial.printf("IV (%d): ", iv_len);
+  for (int i = 0; i < iv_len; i++) Serial.printf("%02X ", iv[i]);
+  Serial.println();
+  
+  Serial.printf("Ciphertext (%d): ", ct_len);
+  for (int i = 0; i < ct_len; i++) Serial.printf("%02X ", ct[i]);
+  Serial.println();
+  
+  Serial.printf("Tag (%d): ", tag_len);
+  for (int i = 0; i < tag_len; i++) Serial.printf("%02X ", tag[i]);
+  Serial.println();
 
-  Serial.println("Base64 decoded successfully, starting decryption...");
-  sendToWebServer("Base64 decoded successfully, starting decryption...", "info");
-
+  Serial.println("=== DECRYPTION PROCESS ===");
+  Serial.println("🔐 Starting AES-GCM decryption...");
+  sendToWebServer("🔐 Starting AES-GCM decryption...", "info");
+  
+  Serial.println("⚙️  Setting up cipher context...");
+  sendToWebServer("⚙️ Setting up cipher context...", "info");
+  
   uint8_t plain[1024];
   bool ok = aes_gcm_decrypt(key, iv, (size_t)iv_len, ct, (size_t)ct_len, tag, (size_t)tag_len,
                             nullptr, 0, plain);
+  
   if (!ok) {
-    Serial.println("Decrypt verify failed.");
-    sendToWebServer("Decrypt verify failed", "error");
+    Serial.println("❌ DECRYPTION FAILED");
+    Serial.println("🚫 Authentication tag verification failed");
+    sendToWebServer("❌ DECRYPTION FAILED", "error");
+    sendToWebServer("🚫 Authentication tag verification failed", "error");
     return;
   }
   
-  Serial.println("Decryption successful, extracting plaintext...");
-  sendToWebServer("Decryption successful, extracting plaintext...", "info");
+  Serial.println("✅ Authentication tag verified successfully");
+  sendToWebServer("✅ Authentication tag verified successfully", "info");
+  
+  Serial.println("🔓 Decryption completed successfully");
+  sendToWebServer("🔓 Decryption completed successfully", "info");
+  
+  Serial.print("📝 Extracting plaintext message: ");
   
   String msg;
-  msg.reserve(ct_len + 1);
   for (int i = 0; i < ct_len; ++i) {
     msg += (char)plain[i];
   }
-  Serial.print("Decrypted: ");
-  Serial.println(msg);
   
-  // Send decrypted message to web server
-  sendToWebServer("✅ Message decrypted successfully: " + msg, "decrypted");
+  Serial.println("'" + msg + "'");
+  sendToWebServer("📝 Extracted message: '" + msg + "'", "info");
+  
+  Serial.println("🎉 Message decryption process complete!");
+  sendToWebServer("🎉 Message decryption process complete!", "info");
+  Serial.println("========================");
+  
+  sendToWebServer("✅ Successfully decrypted: " + msg, "decrypted");
 }
-
-
