@@ -193,27 +193,55 @@ void loop() {
     delay(10);
     return;
   }
+  
+  // Check if line is too short to be valid JSON
+  if (line.length() < 50) {
+    Serial.print("Line too short, ignoring: ");
+    Serial.println(line);
+    return;
+  }
   // Parse JSON { iv, ciphertext, tag }
   Serial.println("Received encrypted message, parsing JSON...");
   sendToWebServer("Received encrypted message, parsing JSON...", "info");
   
-  StaticJsonDocument<768> doc;
+  StaticJsonDocument<1024> doc;
   DeserializationError err = deserializeJson(doc, line);
   if (err) {
     Serial.print("JSON parse error: "); Serial.println(err.c_str());
+    Serial.print("Raw JSON string: "); Serial.println(line);
     sendToWebServer("JSON parse error: " + String(err.c_str()), "error");
     return;
   }
+  
+  // Debug: print the parsed document
+  Serial.println("JSON document parsed successfully");
+  Serial.print("Document size: "); Serial.println(doc.size());
   const char *iv_b64 = doc["iv"] | nullptr;
   const char *ct_b64 = doc["ciphertext"] | nullptr;
   const char *tag_b64 = doc["tag"] | nullptr;
   
   Serial.print("Parsed fields - iv: ");
   Serial.print(iv_b64 ? "OK" : "NULL");
+  if (iv_b64) {
+    Serial.print(" (");
+    Serial.print(iv_b64);
+    Serial.print(")");
+  }
   Serial.print(", ciphertext: ");
   Serial.print(ct_b64 ? "OK" : "NULL");
+  if (ct_b64) {
+    Serial.print(" (");
+    Serial.print(ct_b64);
+    Serial.print(")");
+  }
   Serial.print(", tag: ");
-  Serial.println(tag_b64 ? "OK" : "NULL");
+  Serial.print(tag_b64 ? "OK" : "NULL");
+  if (tag_b64) {
+    Serial.print(" (");
+    Serial.print(tag_b64);
+    Serial.print(")");
+  }
+  Serial.println();
   
   if (!iv_b64 || !ct_b64 || !tag_b64) {
     Serial.println("Invalid JSON fields - missing required fields.");
