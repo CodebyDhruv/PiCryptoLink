@@ -63,7 +63,9 @@ def send_message():
     try:
         tcp_server.send_json(encrypted)
         log_event(f"Pi Sent: {plaintext}")
-        log_event(f"Ciphertext: {encrypted}")
+        # Show proper JSON format in logs
+        import json
+        log_event(f"Ciphertext: {json.dumps(encrypted)}")
         return {"ok": True}
     except Exception as exc:  # noqa: BLE001
         log_event(f"Send failed: {exc}")

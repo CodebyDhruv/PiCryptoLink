@@ -161,15 +161,22 @@ void setup() {
 
 String readLine(WiFiClient &c) {
   String line;
-  while (c.connected()) {
+  unsigned long timeout = millis() + 5000; // 5 second timeout
+  
+  while (c.connected() && millis() < timeout) {
     if (c.available()) {
       char ch = (char)c.read();
       if (ch == '\n') break;
       line += ch;
     } else {
-      delay(5);
+      delay(10);
     }
   }
+  
+  // Debug: print what we received
+  Serial.print("Received line: ");
+  Serial.println(line);
+  
   return line;
 }
 
@@ -200,9 +207,17 @@ void loop() {
   const char *iv_b64 = doc["iv"] | nullptr;
   const char *ct_b64 = doc["ciphertext"] | nullptr;
   const char *tag_b64 = doc["tag"] | nullptr;
+  
+  Serial.print("Parsed fields - iv: ");
+  Serial.print(iv_b64 ? "OK" : "NULL");
+  Serial.print(", ciphertext: ");
+  Serial.print(ct_b64 ? "OK" : "NULL");
+  Serial.print(", tag: ");
+  Serial.println(tag_b64 ? "OK" : "NULL");
+  
   if (!iv_b64 || !ct_b64 || !tag_b64) {
-    Serial.println("Invalid JSON fields.");
-    sendToWebServer("Invalid JSON fields", "error");
+    Serial.println("Invalid JSON fields - missing required fields.");
+    sendToWebServer("Invalid JSON fields - missing required fields", "error");
     return;
   }
 
