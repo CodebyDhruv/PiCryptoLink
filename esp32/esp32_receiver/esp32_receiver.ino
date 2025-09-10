@@ -187,10 +187,14 @@ void loop() {
     return;
   }
   // Parse JSON { iv, ciphertext, tag }
+  Serial.println("Received encrypted message, parsing JSON...");
+  sendToWebServer("Received encrypted message, parsing JSON...", "info");
+  
   StaticJsonDocument<768> doc;
   DeserializationError err = deserializeJson(doc, line);
   if (err) {
     Serial.print("JSON parse error: "); Serial.println(err.c_str());
+    sendToWebServer("JSON parse error: " + String(err.c_str()), "error");
     return;
   }
   const char *iv_b64 = doc["iv"] | nullptr;
@@ -198,8 +202,12 @@ void loop() {
   const char *tag_b64 = doc["tag"] | nullptr;
   if (!iv_b64 || !ct_b64 || !tag_b64) {
     Serial.println("Invalid JSON fields.");
+    sendToWebServer("Invalid JSON fields", "error");
     return;
   }
+
+  Serial.println("JSON parsed successfully, decoding base64...");
+  sendToWebServer("JSON parsed successfully, decoding base64...", "info");
 
   uint8_t iv[16]; // will use 12
   uint8_t ct[1024];
@@ -209,8 +217,12 @@ void loop() {
   int tag_len = b64decode(tag_b64, tag, sizeof(tag));
   if (iv_len <= 0 || ct_len <= 0 || tag_len <= 0) {
     Serial.println("Base64 decode failed.");
+    sendToWebServer("Base64 decode failed", "error");
     return;
   }
+
+  Serial.println("Base64 decoded successfully, starting decryption...");
+  sendToWebServer("Base64 decoded successfully, starting decryption...", "info");
 
   uint8_t plain[1024];
   bool ok = aes_gcm_decrypt(key, iv, (size_t)iv_len, ct, (size_t)ct_len, tag, (size_t)tag_len,
@@ -220,6 +232,10 @@ void loop() {
     sendToWebServer("Decrypt verify failed", "error");
     return;
   }
+  
+  Serial.println("Decryption successful, extracting plaintext...");
+  sendToWebServer("Decryption successful, extracting plaintext...", "info");
+  
   String msg;
   msg.reserve(ct_len + 1);
   for (int i = 0; i < ct_len; ++i) {
@@ -229,7 +245,7 @@ void loop() {
   Serial.println(msg);
   
   // Send decrypted message to web server
-  sendToWebServer("Message received and decrypted: " + msg, "decrypted");
+  sendToWebServer("✅ Message decrypted successfully: " + msg, "decrypted");
 }
 
 

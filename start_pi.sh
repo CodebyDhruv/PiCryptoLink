@@ -21,3 +21,4 @@ export PYTHONDONTWRITEBYTECODE=1
 
 echo "Starting server with optimized settings..."
 python3 -O server.py
+
