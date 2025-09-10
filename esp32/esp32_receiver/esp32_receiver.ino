@@ -176,6 +176,16 @@ String readLine(WiFiClient &c) {
   // Debug: print what we received
   Serial.print("Received line: ");
   Serial.println(line);
+  Serial.print("Line length: ");
+  Serial.println(line.length());
+  
+  // Debug: print raw bytes
+  Serial.print("Raw bytes: ");
+  for (int i = 0; i < line.length(); i++) {
+    Serial.print((int)line[i], HEX);
+    Serial.print(" ");
+  }
+  Serial.println();
   
   return line;
 }
@@ -199,6 +209,20 @@ void loop() {
     Serial.print("Line too short, ignoring: ");
     Serial.println(line);
     return;
+  }
+  
+  // Test with a known good JSON string first
+  if (line.indexOf("test") >= 0) {
+    Serial.println("Testing with known JSON...");
+    String testJson = "{\"iv\":\"dGVzdA==\",\"ciphertext\":\"dGVzdA==\",\"tag\":\"dGVzdA==\"}";
+    StaticJsonDocument<256> testDoc;
+    DeserializationError testErr = deserializeJson(testDoc, testJson);
+    if (testErr) {
+      Serial.print("Test JSON failed: ");
+      Serial.println(testErr.c_str());
+    } else {
+      Serial.println("Test JSON parsing works!");
+    }
   }
   // Parse JSON { iv, ciphertext, tag }
   Serial.println("Received encrypted message, parsing JSON...");
